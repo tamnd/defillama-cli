@@ -25,7 +25,7 @@ func TestListProtocols(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/protocols" {
-			json.NewEncoder(w).Encode([]map[string]interface{}{
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 				{
 					"id":        "1",
 					"name":      "Uniswap",
@@ -78,7 +78,7 @@ func TestListProtocols(t *testing.T) {
 func TestListProtocolsFilter(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{"name": "Uniswap", "symbol": "UNI", "chain": "Ethereum", "category": "DEX", "tvl": 5e9},
 			{"name": "Aave", "symbol": "AAVE", "chain": "Ethereum", "category": "Lending", "tvl": 8e9},
 			{"name": "PancakeSwap", "symbol": "CAKE", "chain": "BSC", "category": "DEX", "tvl": 3e9},
@@ -123,7 +123,7 @@ func TestListProtocolsFilter(t *testing.T) {
 func TestListChains(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{"name": "Ethereum", "tokenSymbol": "ETH", "tvl": 50000000000.0},
 			{"name": "BSC", "tokenSymbol": "BNB", "tvl": 5000000000.0},
 		})
@@ -154,7 +154,7 @@ func TestListChains(t *testing.T) {
 func TestListStablecoins(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"peggedAssets": []map[string]interface{}{
 				{
 					"name":         "Tether",
@@ -205,7 +205,7 @@ func TestListStablecoins(t *testing.T) {
 func TestListYields(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "ok",
 			"data": []map[string]interface{}{
 				{
@@ -273,7 +273,7 @@ func TestGetProtocol(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/protocol/uniswap" {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"name":      "Uniswap",
 				"symbol":    "UNI",
 				"chain":     "Ethereum",
