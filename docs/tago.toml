@@ -1,0 +1,10 @@
+title       = "defillama"
+baseURL     = "https://defillama-cli.tamnd.com/"
+description = "DeFi Llama: 7,661+ DeFi protocols, 452 chains, yield pools"
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/defillama-cli"
