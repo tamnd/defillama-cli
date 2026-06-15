@@ -7,14 +7,16 @@ heroPrimaryURL: "/getting-started/quick-start/"
 heroPrimaryText: "Get started"
 ---
 
-`defillama` reads public defillama data over plain HTTPS, shapes it into
+`defillama` reads public DeFi Llama data over plain HTTPS, shapes it into
 clean records, and gets out of your way.
 
 ```bash
-defillama page <path>            # fetch one page as a record
-defillama page <path> -o json    # as JSON, ready for jq
-defillama links <path>           # the pages it links to, each addressable
-defillama serve --addr :7777     # the same operations over HTTP
+defillama protocols --limit=20 --category=DEX   # top DEX protocols by TVL
+defillama chains --limit=20                     # top chains by TVL
+defillama stablecoins --limit=20                # top stablecoins by market cap
+defillama yields --min-apy=10 --chain=Ethereum  # yield pools with APY >= 10%
+defillama tvl uniswap                           # TVL for a specific protocol
+defillama serve --addr :7777                    # same operations over HTTP
 ```
 
 There is nothing to sign up for and nothing to run alongside it. Output adapts
