@@ -2,34 +2,27 @@ package defillama
 
 import (
 	"context"
-	"net/url"
-	"strings"
 
 	"github.com/tamnd/any-cli/kit"
-	"github.com/tamnd/any-cli/kit/errs"
 )
 
-// domain.go exposes defillama as a kit Domain: a driver that a multi-domain
+// domain.go exposes DeFi Llama as a kit Domain: a driver that a multi-domain
 // host (ant) enables with a single blank import,
 //
 //	import _ "github.com/tamnd/defillama-cli/defillama"
 //
 // exactly as a database/sql program enables a driver with `import _
 // "github.com/lib/pq"`. The init below registers it; the host then dereferences
-// defillama:// URIs by routing to the operations Register installs. The same
-// Domain also builds the standalone defillama binary (see cli.NewApp), so the
-// binary and a host share one source of truth.
-//
-// This is the scaffold's starting point: one resource type, "page", served by a
-// resolver op and a list op. Add your real types here as you model the site.
+// defillama:// URIs by routing to the operations Register installs. The standalone
+// defillama binary does not use any of this, so the CLI is unchanged.
 func init() { kit.Register(Domain{}) }
 
-// Domain is the defillama driver. It carries no state; the per-run client is
+// Domain is the DeFi Llama driver. It carries no state; the per-run client is
 // built by the factory Register hands kit.
 type Domain struct{}
 
 // Info describes the scheme, the hostnames a pasted link is matched against, and
-// the identity reused for the binary's help and version.
+// the identity a host reuses for help and version.
 func (Domain) Info() kit.DomainInfo {
 	return kit.DomainInfo{
 		Scheme: "defillama",
@@ -37,39 +30,39 @@ func (Domain) Info() kit.DomainInfo {
 		Identity: kit.Identity{
 			Binary: "defillama",
 			Short:  "DeFi Llama: 7,661+ DeFi protocols, 452 chains, yield pools",
-			Long: `DeFi Llama: 7,661+ DeFi protocols, 452 chains, yield pools
+			Long: `DeFi Llama is the most comprehensive DeFi data aggregator.
 
-defillama reads public defillama data over plain HTTPS, shapes it into
-clean records, and prints output that pipes into the rest of your tools. No API
-key, nothing to run alongside it.`,
+defillama reads public data over plain HTTPS, shapes it into clean records,
+and prints output that pipes into the rest of your tools. No API key, nothing
+to run alongside it.`,
 			Site: Host,
 			Repo: "https://github.com/tamnd/defillama-cli",
 		},
 	}
 }
 
-// Register installs the client factory and every operation onto app. A resolver
-// op (Single) names its own record type and answers `ant get`; a List op
-// enumerates a parent resource's members and answers `ant ls`.
+// Register installs the client factory and every DeFi Llama operation onto app.
 func (Domain) Register(app *kit.App) {
 	app.SetClient(newClient)
 
-	// Resolver op: one record per id, the home of `defillama page` and
-	// `ant get defillama://page/<id>`.
-	kit.Handle(app, kit.OpMeta{Name: "page", Group: "read", Single: true,
-		Summary: "Fetch a page by path or URL", URIType: "page", Resolver: true,
-		Args: []kit.Arg{{Name: "ref", Help: "page path or URL"}}}, getPage)
+	kit.Handle(app, kit.OpMeta{Name: "protocols", Group: "read", List: true,
+		Summary: "List DeFi protocols by TVL (--category, --chain, --limit)"}, listProtocols)
 
-	// List op: members of a page, the home of `defillama links` and `ant ls`.
-	// It emits page stubs, so every listed member is itself an addressable
-	// defillama://page/ URI a host can follow.
-	kit.Handle(app, kit.OpMeta{Name: "links", Group: "read", List: true,
-		Summary: "List the pages a page links to", URIType: "page",
-		Args: []kit.Arg{{Name: "ref", Help: "page path or URL"}}}, listLinks)
+	kit.Handle(app, kit.OpMeta{Name: "chains", Group: "read", List: true,
+		Summary: "List blockchain chains by TVL (--limit)"}, listChains)
+
+	kit.Handle(app, kit.OpMeta{Name: "stablecoins", Group: "read", List: true,
+		Summary: "List stablecoins by market cap (--limit)"}, listStablecoins)
+
+	kit.Handle(app, kit.OpMeta{Name: "yields", Group: "read", List: true,
+		Summary: "List yield farming pools (--min-apy, --chain, --project, --stablecoin)"}, listYields)
+
+	kit.Handle(app, kit.OpMeta{Name: "tvl", Group: "read", Single: true,
+		Summary: "Get TVL data for a specific protocol",
+		Args:    []kit.Arg{{Name: "slug", Help: "protocol slug (e.g. uniswap, aave)"}}}, getProtocolTVL)
 }
 
-// newClient builds the client from the host-resolved config, so a host and the
-// standalone binary pace and identify themselves the same way.
+// newClient builds the client from the host-resolved config.
 func newClient(_ context.Context, cfg kit.Config) (any, error) {
 	c := NewClient()
 	if cfg.UserAgent != "" {
@@ -88,39 +81,46 @@ func newClient(_ context.Context, cfg kit.Config) (any, error) {
 }
 
 // --- inputs ---
-//
-// Each handler takes a typed input struct. kit fills the fields from the tags:
-// kit:"arg" is a positional argument, kit:"flag,inherit" binds the framework's
-// shared flag of the same name, and kit:"inject" receives the client newClient
-// builds.
 
-type pageRef struct {
-	Ref    string  `kit:"arg" help:"page path or URL"`
+type protocolsInput struct {
+	Category string  `kit:"flag" help:"filter by category (DEX, Lending, Bridge, etc)"`
+	Chain    string  `kit:"flag" help:"filter by chain (Ethereum, BSC, etc)"`
+	Limit    int     `kit:"flag,inherit" help:"max results"`
+	Client   *Client `kit:"inject"`
+}
+
+type chainsInput struct {
+	Limit  int     `kit:"flag,inherit" help:"max results"`
 	Client *Client `kit:"inject"`
 }
 
-type listRef struct {
-	Ref    string  `kit:"arg" help:"page path or URL"`
+type stablecoinsInput struct {
 	Limit  int     `kit:"flag,inherit" help:"max results"`
+	Client *Client `kit:"inject"`
+}
+
+type yieldsInput struct {
+	MinAPY     float64 `kit:"flag" help:"minimum APY filter"`
+	Chain      string  `kit:"flag" help:"chain filter"`
+	Project    string  `kit:"flag" help:"project filter"`
+	Stablecoin bool    `kit:"flag" help:"filter to stablecoin pools only"`
+	Limit      int     `kit:"flag,inherit" help:"max results"`
+	Client     *Client `kit:"inject"`
+}
+
+type tvlInput struct {
+	Slug   string  `kit:"arg" help:"protocol slug"`
 	Client *Client `kit:"inject"`
 }
 
 // --- handlers ---
 
-func getPage(ctx context.Context, in pageRef, emit func(*Page) error) error {
-	p, err := in.Client.GetPage(ctx, pagePath(in.Ref))
+func listProtocols(ctx context.Context, in protocolsInput, emit func(*Protocol) error) error {
+	protocols, err := in.Client.ListProtocols(ctx, in.Category, in.Chain, in.Limit)
 	if err != nil {
-		return mapErr(err)
+		return err
 	}
-	return emit(p)
-}
-
-func listLinks(ctx context.Context, in listRef, emit func(*Page) error) error {
-	pages, err := in.Client.PageLinks(ctx, pagePath(in.Ref), in.Limit)
-	if err != nil {
-		return mapErr(err)
-	}
-	for _, p := range pages {
+	for _, p := range protocols {
 		if err := emit(p); err != nil {
 			return err
 		}
@@ -128,46 +128,49 @@ func listLinks(ctx context.Context, in listRef, emit func(*Page) error) error {
 	return nil
 }
 
-// --- Resolver: the URI-native string functions, pure and network-free ---
-
-// Classify turns any accepted input — a bare path or a full defillama.com URL —
-// into the canonical (type, id), so `ant resolve` and `ant url` touch no network.
-func (Domain) Classify(input string) (uriType, id string, err error) {
-	id = pagePath(input)
-	if id == "" {
-		return "", "", errs.Usage("unrecognized defillama reference: %q", input)
+func listChains(ctx context.Context, in chainsInput, emit func(*Chain) error) error {
+	chains, err := in.Client.ListChains(ctx, in.Limit)
+	if err != nil {
+		return err
 	}
-	return "page", id, nil
+	for _, ch := range chains {
+		if err := emit(ch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// Locate is the inverse: the live https URL for a (type, id).
-func (Domain) Locate(uriType, id string) (string, error) {
-	if uriType != "page" {
-		return "", errs.Usage("defillama has no resource type %q", uriType)
+func listStablecoins(ctx context.Context, in stablecoinsInput, emit func(*Stablecoin) error) error {
+	stables, err := in.Client.ListStablecoins(ctx, in.Limit)
+	if err != nil {
+		return err
 	}
-	return BaseURL + "/" + strings.Trim(id, "/"), nil
+	for _, s := range stables {
+		if err := emit(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// --- helpers ---
-
-// pagePath turns any accepted input into the canonical page id: the path of a
-// full URL on this host, or a bare path with its slashes trimmed.
-func pagePath(input string) string {
-	input = strings.TrimSpace(input)
-	if u, err := url.Parse(input); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-		return strings.Trim(u.Path, "/")
+func listYields(ctx context.Context, in yieldsInput, emit func(*YieldPool) error) error {
+	pools, err := in.Client.ListYields(ctx, in.MinAPY, in.Chain, in.Project, in.Stablecoin, in.Limit)
+	if err != nil {
+		return err
 	}
-	return strings.Trim(input, "/")
+	for _, p := range pools {
+		if err := emit(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// mapErr converts a library error into the kit error kind that carries the right
-// exit code, so a host renders the same outcomes the standalone binary does. As
-// you add sentinel errors to the library, map them here, for example:
-//
-//	case errors.Is(err, ErrNotFound):
-//		return errs.NotFound("%s", err.Error())
-//	case errors.Is(err, ErrRateLimited):
-//		return errs.RateLimited("%s", err.Error())
-func mapErr(err error) error {
-	return err
+func getProtocolTVL(ctx context.Context, in tvlInput, emit func(*Protocol) error) error {
+	p, err := in.Client.GetProtocol(ctx, in.Slug)
+	if err != nil {
+		return err
+	}
+	return emit(p)
 }

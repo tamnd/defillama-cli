@@ -1,59 +1,115 @@
 // Package defillama is the library behind the defillama command line:
-// the HTTP client, request shaping, and the typed data models for defillama.
+// the HTTP client, request shaping, and the typed data models for the
+// DeFi Llama API.
 //
 // The Client here is the spine every command shares. It sets a real
 // User-Agent, paces requests so a busy session stays polite, and retries the
-// transient failures (429 and 5xx) that any public site throws under load.
-// Build your endpoint calls and JSON decoding on top of it.
+// transient failures (429 and 5xx) that any public API throws under load.
 package defillama
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
-	"strings"
+	"sort"
 	"time"
 )
 
-// DefaultUserAgent identifies the client to defillama. A real, honest
-// User-Agent is both polite and the thing most likely to keep you unblocked.
-const DefaultUserAgent = "defillama/dev (+https://github.com/tamnd/defillama-cli)"
+// Host is the primary API host.
+const Host = "api.llama.fi"
 
-// Host is the site this client talks to, and the host the URI driver in
-// domain.go claims. The scaffold points it at defillama.com; change it once you
-// know the real endpoints you want to read.
-const Host = "defillama.com"
-
-// BaseURL is the root every request is built from.
+// BaseURL is the root every main request is built from.
 const BaseURL = "https://" + Host
 
-// Client talks to defillama over HTTP.
-type Client struct {
-	HTTP      *http.Client
-	UserAgent string
-	// Rate is the minimum gap between requests. Zero means no pacing.
-	Rate    time.Duration
-	Retries int
+// StablecoinsURL is the stablecoins subdomain.
+const StablecoinsURL = "https://stablecoins.llama.fi"
 
-	last time.Time
+// YieldsURL is the yields subdomain.
+const YieldsURL = "https://yields.llama.fi"
+
+// DefaultUserAgent identifies the client to DeFi Llama.
+const DefaultUserAgent = "defillama-cli/0.1 (tamnd87@gmail.com)"
+
+// Config holds the client configuration.
+type Config struct {
+	BaseURL        string
+	StablecoinsURL string
+	YieldsURL      string
+	UserAgent      string
+	Rate           time.Duration
+	Timeout        time.Duration
+	Retries        int
 }
 
-// NewClient returns a Client with sensible defaults: a 30s timeout, a 200ms
-// minimum gap between requests, and five retries on transient errors.
-func NewClient() *Client {
-	return &Client{
-		HTTP:      &http.Client{Timeout: 30 * time.Second},
-		UserAgent: DefaultUserAgent,
-		Rate:      200 * time.Millisecond,
-		Retries:   5,
+// DefaultConfig returns sensible defaults.
+func DefaultConfig() Config {
+	return Config{
+		BaseURL:        BaseURL,
+		StablecoinsURL: StablecoinsURL,
+		YieldsURL:      YieldsURL,
+		Rate:           500 * time.Millisecond,
+		Timeout:        30 * time.Second,
+		Retries:        3,
+		UserAgent:      DefaultUserAgent,
 	}
 }
 
-// Get fetches url and returns the response body. It paces and retries according
-// to the client's settings. The caller owns nothing extra; the body is read
-// fully and closed here.
+// Client talks to the DeFi Llama API over HTTP.
+type Client struct {
+	HTTP           *http.Client
+	UserAgent      string
+	Rate           time.Duration
+	Retries        int
+	baseURL        string
+	stablecoinsURL string
+	yieldsURL      string
+	last           time.Time
+}
+
+// NewClient returns a Client with sensible defaults.
+func NewClient() *Client {
+	cfg := DefaultConfig()
+	return &Client{
+		HTTP:           &http.Client{Timeout: cfg.Timeout},
+		UserAgent:      cfg.UserAgent,
+		Rate:           cfg.Rate,
+		Retries:        cfg.Retries,
+		baseURL:        cfg.BaseURL,
+		stablecoinsURL: cfg.StablecoinsURL,
+		yieldsURL:      cfg.YieldsURL,
+	}
+}
+
+// NewClientFromConfig returns a Client configured from cfg.
+func NewClientFromConfig(cfg Config) *Client {
+	c := NewClient()
+	if cfg.BaseURL != "" {
+		c.baseURL = cfg.BaseURL
+	}
+	if cfg.StablecoinsURL != "" {
+		c.stablecoinsURL = cfg.StablecoinsURL
+	}
+	if cfg.YieldsURL != "" {
+		c.yieldsURL = cfg.YieldsURL
+	}
+	if cfg.UserAgent != "" {
+		c.UserAgent = cfg.UserAgent
+	}
+	if cfg.Rate > 0 {
+		c.Rate = cfg.Rate
+	}
+	if cfg.Timeout > 0 {
+		c.HTTP.Timeout = cfg.Timeout
+	}
+	if cfg.Retries > 0 {
+		c.Retries = cfg.Retries
+	}
+	return c
+}
+
+// Get fetches a URL and returns the response body.
 func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.Retries; attempt++ {
@@ -104,7 +160,6 @@ func (c *Client) do(ctx context.Context, url string) (body []byte, retry bool, e
 	return b, false, nil
 }
 
-// pace blocks until at least Rate has passed since the previous request.
 func (c *Client) pace() {
 	if c.Rate <= 0 {
 		return
@@ -123,78 +178,292 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
-// Page is the scaffold's one example record: a single page, addressed by the
-// path that names it on defillama.com. It is a stand-in for the typed records you
-// will model from the real defillama endpoints. The kit struct tags make it
-// addressable as a resource URI (see domain.go): ID is the URI id, and Body is
-// the long text `defillama cat` and the Markdown export print.
-type Page struct {
-	ID    string `json:"id" kit:"id"`
-	URL   string `json:"url"`
-	Title string `json:"title,omitempty"`
-	Body  string `json:"body,omitempty" kit:"body"`
+// --- output types ---
+
+// Protocol is a DeFi protocol with TVL data.
+type Protocol struct {
+	Name     string  `json:"name"`
+	Symbol   string  `json:"symbol"`
+	Chain    string  `json:"chain"`
+	Category string  `json:"category"`
+	TVL      float64 `json:"tvl"`
+	Change1D float64 `json:"change_1d"`
+	Change7D float64 `json:"change_7d"`
+	URL      string  `json:"url"`
 }
 
-// GetPage fetches one page by its path (for example "wiki/Go") and returns it as
-// a record. The scaffold keeps a plain-text preview of the response as the body;
-// replace the parsing with the real fields once you know the endpoint's shape.
-func (c *Client) GetPage(ctx context.Context, path string) (*Page, error) {
-	path = strings.Trim(path, "/")
-	url := BaseURL + "/" + path
-	body, err := c.Get(ctx, url)
+// Chain is a blockchain network.
+type Chain struct {
+	Name   string  `json:"name"`
+	Symbol string  `json:"symbol"`
+	TVL    float64 `json:"tvl"`
+}
+
+// Stablecoin is a pegged digital asset.
+type Stablecoin struct {
+	Name      string  `json:"name"`
+	Symbol    string  `json:"symbol"`
+	PegType   string  `json:"peg_type"`
+	Mechanism string  `json:"mechanism"`
+	CircUSD   float64 `json:"circulating_usd"`
+	Price     float64 `json:"price"`
+}
+
+// YieldPool is a DeFi yield farming pool.
+type YieldPool struct {
+	Chain      string  `json:"chain"`
+	Project    string  `json:"project"`
+	Symbol     string  `json:"symbol"`
+	TVLUsd     float64 `json:"tvl_usd"`
+	APY        float64 `json:"apy"`
+	PoolID     string  `json:"pool_id"`
+	Stablecoin bool    `json:"stablecoin"`
+}
+
+// --- wire types ---
+
+type wireProtocol struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Slug     string   `json:"slug"`
+	Symbol   string   `json:"symbol"`
+	Chain    string   `json:"chain"`
+	Logo     string   `json:"logo"`
+	TVL      float64  `json:"tvl"`
+	Change1H float64  `json:"change_1h"`
+	Change1D float64  `json:"change_1d"`
+	Change7D float64  `json:"change_7d"`
+	Category string   `json:"category"`
+	Chains   []string `json:"chains"`
+	URL      string   `json:"url"`
+}
+
+type wireChain struct {
+	Name        string  `json:"name"`
+	GeckoID     string  `json:"gecko_id"`
+	TVL         float64 `json:"tvl"`
+	TokenSymbol string  `json:"tokenSymbol"`
+	CMCID       int     `json:"cmcId"`
+	ChainID     int     `json:"chainId"`
+}
+
+type wireStablecoinsResp struct {
+	PeggedAssets []wireStablecoin `json:"peggedAssets"`
+}
+
+type wireStablecoin struct {
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Symbol       string                 `json:"symbol"`
+	PegType      string                 `json:"pegType"`
+	PegMechanism string                 `json:"pegMechanism"`
+	Price        float64                `json:"price"`
+	Circulating  map[string]interface{} `json:"circulating"`
+}
+
+type wirePoolsResp struct {
+	Status string     `json:"status"`
+	Data   []wirePool `json:"data"`
+}
+
+type wirePool struct {
+	Chain      string  `json:"chain"`
+	Project    string  `json:"project"`
+	Symbol     string  `json:"symbol"`
+	TVLUsd     float64 `json:"tvlUsd"`
+	APY        float64 `json:"apy"`
+	APYBase    float64 `json:"apyBase"`
+	APYReward  float64 `json:"apyReward"`
+	Pool       string  `json:"pool"`
+	StableCoin bool    `json:"stableCoin"`
+	ILRisk     string  `json:"ilRisk"`
+}
+
+// --- API methods ---
+
+// ListProtocols fetches all protocols and applies optional filters.
+func (c *Client) ListProtocols(ctx context.Context, category, chain string, limit int) ([]*Protocol, error) {
+	body, err := c.Get(ctx, c.baseURL+"/protocols")
 	if err != nil {
 		return nil, err
 	}
-	return &Page{ID: path, URL: url, Title: path, Body: pageText(body)}, nil
-}
 
-// PageLinks fetches a page and returns the same-host pages it links to, as page
-// stubs. It shows the member-listing pattern the URI driver relies on: every
-// stub carries enough (an id and a URL) to be addressed and followed on its own.
-func (c *Client) PageLinks(ctx context.Context, path string, limit int) ([]*Page, error) {
-	path = strings.Trim(path, "/")
-	body, err := c.Get(ctx, BaseURL+"/"+path)
-	if err != nil {
-		return nil, err
+	var raw []wireProtocol
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode protocols: %w", err)
 	}
-	var out []*Page
-	seen := map[string]bool{}
-	for _, p := range linkPaths(body) {
-		if seen[p] {
+
+	var out []*Protocol
+	for _, w := range raw {
+		if category != "" && w.Category != category {
 			continue
 		}
-		seen[p] = true
-		out = append(out, &Page{ID: p, URL: BaseURL + "/" + p})
-		if limit > 0 && len(out) >= limit {
-			break
+		if chain != "" && w.Chain != chain {
+			continue
 		}
+		out = append(out, &Protocol{
+			Name:     w.Name,
+			Symbol:   w.Symbol,
+			Chain:    w.Chain,
+			Category: w.Category,
+			TVL:      w.TVL,
+			Change1D: w.Change1D,
+			Change7D: w.Change7D,
+			URL:      w.URL,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].TVL > out[j].TVL
+	})
+
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
 
-var (
-	hrefRE = regexp.MustCompile(`href="(/[^":#?]+)"`)
-	tagRE  = regexp.MustCompile(`<[^>]+>`)
-)
-
-// linkPaths pulls the relative link targets out of an HTML response, so a list
-// op can turn each into an addressable page stub.
-func linkPaths(body []byte) []string {
-	var out []string
-	for _, m := range hrefRE.FindAllSubmatch(body, -1) {
-		if p := strings.Trim(string(m[1]), "/"); p != "" {
-			out = append(out, p)
-		}
+// GetProtocol fetches a single protocol by slug.
+func (c *Client) GetProtocol(ctx context.Context, slug string) (*Protocol, error) {
+	body, err := c.Get(ctx, c.baseURL+"/protocol/"+slug)
+	if err != nil {
+		return nil, err
 	}
-	return out
+
+	var w wireProtocol
+	if err := json.Unmarshal(body, &w); err != nil {
+		return nil, fmt.Errorf("decode protocol: %w", err)
+	}
+
+	return &Protocol{
+		Name:     w.Name,
+		Symbol:   w.Symbol,
+		Chain:    w.Chain,
+		Category: w.Category,
+		TVL:      w.TVL,
+		Change1D: w.Change1D,
+		Change7D: w.Change7D,
+		URL:      w.URL,
+	}, nil
 }
 
-// pageText reduces an HTML response to a short plain-text preview, a stand-in
-// for the typed extract a real endpoint would hand you.
-func pageText(body []byte) string {
-	s := strings.Join(strings.Fields(tagRE.ReplaceAllString(string(body), " ")), " ")
-	if len(s) > 500 {
-		s = s[:500]
+// ListChains fetches all chains sorted by TVL.
+func (c *Client) ListChains(ctx context.Context, limit int) ([]*Chain, error) {
+	body, err := c.Get(ctx, c.baseURL+"/v2/chains")
+	if err != nil {
+		return nil, err
 	}
-	return s
+
+	var raw []wireChain
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode chains: %w", err)
+	}
+
+	out := make([]*Chain, len(raw))
+	for i, w := range raw {
+		out[i] = &Chain{
+			Name:   w.Name,
+			Symbol: w.TokenSymbol,
+			TVL:    w.TVL,
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].TVL > out[j].TVL
+	})
+
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// ListStablecoins fetches all stablecoins sorted by circulating USD.
+func (c *Client) ListStablecoins(ctx context.Context, limit int) ([]*Stablecoin, error) {
+	body, err := c.Get(ctx, c.stablecoinsURL+"/stablecoins?includePrices=true")
+	if err != nil {
+		return nil, err
+	}
+
+	var resp wireStablecoinsResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode stablecoins: %w", err)
+	}
+
+	var out []*Stablecoin
+	for _, w := range resp.PeggedAssets {
+		var circUSD float64
+		if w.Circulating != nil {
+			if v, ok := w.Circulating["peggedUSD"]; ok {
+				switch n := v.(type) {
+				case float64:
+					circUSD = n
+				}
+			}
+		}
+		out = append(out, &Stablecoin{
+			Name:      w.Name,
+			Symbol:    w.Symbol,
+			PegType:   w.PegType,
+			Mechanism: w.PegMechanism,
+			CircUSD:   circUSD,
+			Price:     w.Price,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CircUSD > out[j].CircUSD
+	})
+
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// ListYields fetches yield pools with optional filters.
+func (c *Client) ListYields(ctx context.Context, minAPY float64, chain, project string, stablecoinOnly bool, limit int) ([]*YieldPool, error) {
+	body, err := c.Get(ctx, c.yieldsURL+"/pools")
+	if err != nil {
+		return nil, err
+	}
+
+	var resp wirePoolsResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode pools: %w", err)
+	}
+
+	var out []*YieldPool
+	for _, w := range resp.Data {
+		if minAPY > 0 && w.APY < minAPY {
+			continue
+		}
+		if chain != "" && w.Chain != chain {
+			continue
+		}
+		if project != "" && w.Project != project {
+			continue
+		}
+		if stablecoinOnly && !w.StableCoin {
+			continue
+		}
+		out = append(out, &YieldPool{
+			Chain:      w.Chain,
+			Project:    w.Project,
+			Symbol:     w.Symbol,
+			TVLUsd:     w.TVLUsd,
+			APY:        w.APY,
+			PoolID:     w.Pool,
+			Stablecoin: w.StableCoin,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].TVLUsd > out[j].TVLUsd
+	})
+
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
